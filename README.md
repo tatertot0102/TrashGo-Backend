@@ -1,5 +1,5 @@
 # TrashBot Backend
-
+Created by Zane Wolf
 ## Install
 ```bash
 sudo apt-get update
