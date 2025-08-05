@@ -6,7 +6,8 @@ import time
 from threading import Thread
 from flask import Flask, Response
 import cv2
-
+import sys
+sys.stdout.reconfigure(line_buffering=True)
 # ==============================
 # CONFIGURATION
 # ==============================
@@ -56,19 +57,16 @@ ramp_down = False  # Start with ramp UP
 # SERVO UTILITY FUNCTIONS
 # ==============================
 def set_servo(pwm, angle):
-    """Convert angle (0-180) to PWM duty cycle"""
     duty = 2 + (angle / 18)
     pwm.ChangeDutyCycle(duty)
     time.sleep(0.4)
 
-# Arms
 def open_arm(pwm):
     set_servo(pwm, ARM_OPEN_ANGLE)
 
 def close_arm(pwm):
     set_servo(pwm, ARM_CLOSED_ANGLE)
 
-# Ramp
 def lower_ramp():
     global ramp_down
     set_servo(ramp_pwm, RAMP_DOWN_ANGLE)
@@ -84,7 +82,7 @@ raise_ramp()
 print("Ramp initialized to UP position.")
 
 # ==============================
-# MOTOR CONTROL FUNCTIONS
+# MOTOR CONTROL
 # ==============================
 def move_forward():
     GPIO.output(MOTOR_PINS["LEFT_FRONT"], True)
@@ -115,7 +113,7 @@ def stop_motors():
         GPIO.output(pin, False)
 
 # ==============================
-# PICKUP SEQUENCE (with step updates)
+# PICKUP SEQUENCE
 # ==============================
 async def pickup_trash_sequence(websocket):
     global ramp_down
@@ -123,39 +121,42 @@ async def pickup_trash_sequence(websocket):
         await websocket.send(json.dumps({"status": "error", "message": "Ramp must be DOWN before pickup"}))
         return
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Starting pickup sequence"}))
+    steps = [
+        "Closing Right Arm", "Raising Ramp", "Lowering Ramp", "Opening Right Arm",
+        "Closing Left Arm", "Raising Ramp", "Lowering Ramp", "Opening Left Arm"
+    ]
 
     # Right Arm
-    await websocket.send(json.dumps({"status": "progress", "step": "Closing Right Arm"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[0]}))
     close_arm(right_arm_pwm)
     time.sleep(0.8)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Raising Ramp"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[1]}))
     raise_ramp()
     time.sleep(1)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Lowering Ramp"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[2]}))
     lower_ramp()
     time.sleep(0.8)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Opening Right Arm"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[3]}))
     open_arm(right_arm_pwm)
     time.sleep(0.5)
 
     # Left Arm
-    await websocket.send(json.dumps({"status": "progress", "step": "Closing Left Arm"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[4]}))
     close_arm(left_arm_pwm)
     time.sleep(0.8)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Raising Ramp"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[5]}))
     raise_ramp()
     time.sleep(1)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Lowering Ramp"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[6]}))
     lower_ramp()
     time.sleep(0.8)
 
-    await websocket.send(json.dumps({"status": "progress", "step": "Opening Left Arm"}))
+    await websocket.send(json.dumps({"status": "progress", "step": steps[7]}))
     open_arm(left_arm_pwm)
     time.sleep(0.5)
 
@@ -195,7 +196,7 @@ Thread(target=lambda: app.run(host='0.0.0.0', port=8081, threaded=True), daemon=
 # ==============================
 # WEBSOCKET SERVER
 # ==============================
-async def handle_client(websocket, path):
+async def handle_client(websocket):
     print("Client connected")
     try:
         async for message in websocket:
@@ -203,7 +204,6 @@ async def handle_client(websocket, path):
             command = data.get("command")
             print(f"Received command: {command}")
 
-            # Motor commands
             if command == "move_forward":
                 move_forward()
             elif command == "move_backward":
@@ -214,15 +214,12 @@ async def handle_client(websocket, path):
                 turn_right()
             elif command == "stop_motors":
                 stop_motors()
-            # Ramp commands
             elif command == "lower_ramp":
                 lower_ramp()
             elif command == "raise_ramp":
                 raise_ramp()
-            # Pickup sequence
             elif command == "pickup_trash_sequence":
                 await pickup_trash_sequence(websocket)
-            # Safety
             elif command == "emergency_stop":
                 emergency_stop()
             else:
@@ -232,11 +229,12 @@ async def handle_client(websocket, path):
     except websockets.ConnectionClosed:
         print("Client disconnected")
 
-start_server = websockets.serve(handle_client, "0.0.0.0", 8080)
+async def main():
+    async with websockets.serve(handle_client, "0.0.0.0", 8080, max_size=2**20):
+        await asyncio.Future()  # Keeps running
 
 try:
-    asyncio.get_event_loop().run_until_complete(start_server)
-    asyncio.get_event_loop().run_forever()
+    asyncio.run(main())
 except KeyboardInterrupt:
     print("Shutting down...")
     stop_motors()
