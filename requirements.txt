@@ -1,0 +1,4 @@
+websockets
+flask
+opencv-python
+RPi.GPIO
