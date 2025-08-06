@@ -5,9 +5,17 @@ import RPi.GPIO as GPIO
 import time
 from threading import Thread
 from flask import Flask, Response
+import io
 import cv2
 import sys
-sys.stdout.reconfigure(line_buffering=True)
+
+# Try importing Picamera2 for Pi camera
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+except ImportError:
+    PICAMERA_AVAILABLE = False
+
 # ==============================
 # CONFIGURATION
 # ==============================
@@ -174,18 +182,39 @@ def emergency_stop():
     print("Emergency Stop Activated!")
 
 # ==============================
-# CAMERA STREAM (Flask)
+# CAMERA STREAM (AUTO-DETECT)
 # ==============================
 app = Flask(__name__)
-camera = cv2.VideoCapture(0)
 
-def generate_frames():
-    while True:
-        success, frame = camera.read()
-        if not success:
-            break
-        _, buffer = cv2.imencode('.jpg', frame)
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+if PICAMERA_AVAILABLE:
+    try:
+        print("Using Raspberry Pi Camera (Picamera2)")
+        picam2 = Picamera2()
+        video_config = picam2.create_video_configuration(main={"size": (640, 480)})
+        picam2.configure(video_config)
+        picam2.start()
+
+        def generate_frames():
+            while True:
+                frame = picam2.capture_array()
+                _, buffer = cv2.imencode('.jpg', frame)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+    except Exception as e:
+        print(f"Picamera2 init failed: {e}. Falling back to USB camera.")
+        PICAMERA_AVAILABLE = False
+
+if not PICAMERA_AVAILABLE:
+    print("Using USB Camera (OpenCV)")
+    camera = cv2.VideoCapture(0)
+
+    def generate_frames():
+        while True:
+            success, frame = camera.read()
+            if not success:
+                break
+            _, buffer = cv2.imencode('.jpg', frame)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
 @app.route('/video_feed')
 def video_feed():
